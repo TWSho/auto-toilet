@@ -9,27 +9,33 @@
 #include <PubSubClient.h>
 
 // ============================================================
-// ハードウェア接続
-//   ミリ波センサー LD2410 : GROVEポート(PortA, UART)  RX=G21 TX=G22
-//   Audio Player          : PortC(UART2)              RX=G16 TX=G17
-//   IR REMOTE              : PortB                     TX=G26 (送信のみ、受信は使用しない)
-//   本体スピーカーは使用しない(オフ)。GPIO25は本体スピーカーのDAC出力ピンのため、
-//   オフにすることで未使用となり、G25をGNDに落としても問題ない。
+// ハードウェア接続 (M5StampS3 PIN2.54版)
+//   ミリ波センサー LD2410   : UART   TX=G9  RX=G7
+//   Audio Playerモジュール  : UART   TX=G3  RX=G5
+//   赤外線LED送信回路(自作) : GPIO   G1 (送信専用。ベース抵抗経由でNPNトランジスタを駆動しIR LEDを点灯)
+//   状態表示                : 内蔵RGB LED(G21固定、M5Unifiedが自動初期化しM5.Ledで制御)
+//   本体ボタン(G0)           : 押下でトイレ流し(赤外線送信)を手動実行
+//   本体スピーカー・LCDは非搭載のため使用しない
+//
+//   ※G43/G44(U0Tx/U0Rx)は使用しない。ESP-IDFのシステムコンソールUART(UART0)が
+//   デフォルトでこの2ピンに固定されており(sdkconfig: CONFIG_ESP_CONSOLE_UART_NUM=0)、
+//   Arduino側のSerialをUSB CDCへ切り替えても内部的な競合が残り、UART2として
+//   再割り当てしてもジャンパ線での直結ループバックすら成立しなかったため。
 // ============================================================
-static const int RADAR_RX_PIN = 21;
-static const int RADAR_TX_PIN = 22;
+static const int RADAR_RX_PIN = 7; // StampS3 RX ← LD2410 TX
+static const int RADAR_TX_PIN = 9; // StampS3 TX → LD2410 RX
 static const uint32_t RADAR_BAUD = 256000;
-static const int AUDIO_RX_PIN = 16;
-static const int AUDIO_TX_PIN = 17;
-static const int IR_TX_PIN = 26;
+static const int AUDIO_TX_PIN = 3;  // StampS3 TX → Audio Playerモジュール RX
+static const int AUDIO_RX_PIN = 5;  // StampS3 RX ← Audio Playerモジュール TX
+static const int IR_TX_PIN = 1;     // 赤外線LED送信回路(自作)への出力
 
 static const char *AUDIO_FILE_NAME = "mori.mp3";
 static const uint8_t AUDIO_VOLUME = 20;       // 通常再生時の音量(0-30)
 static const uint8_t AUDIO_FADE_STEPS = 10;   // フェードの分割数
 static const unsigned long AUDIO_FADE_STEP_MS = 200; // フェード1段あたりの待機時間(合計2000ms)
 
-static const uint8_t LCD_BRIGHTNESS_ACTIVE = 179; // 入室・滞在中 約70%
-static const uint8_t LCD_BRIGHTNESS_VACANT = 0;   // 退室中 0%
+static const uint8_t LED_BRIGHTNESS_ACTIVE = 179; // 入室・滞在中 約70%
+static const uint8_t LED_BRIGHTNESS_OFF = 0;      // 退室中 消灯
 
 // ---- 赤外線送信(トイレ流し) ----
 IRsend irSender(IR_TX_PIN);
@@ -59,6 +65,9 @@ bool smoothedPresence = false;
 // HomeAssistantのMQTT Discoveryに対応しているため、ブローカーに接続すると
 // binary_sensor(occupancy)が自動で登録される。
 // ★ SSID/パスワード/ブローカーIPは環境に合わせて書き換えること
+// ★人感センサー単体の動作確認用に一時停止中。再開する場合はtrueに戻す。
+static const bool ENABLE_MQTT = false;
+
 static const char *WIFI_SSID = "4017-5Gs";
 static const char *WIFI_PASSWORD = "77777777";
 static const char *MQTT_HOST = "192.168.11.27";
@@ -85,6 +94,7 @@ static const unsigned long AUDIO_INIT_RETRY_DELAY_MS = 500;
 Preferences prefs;
 
 // ---- 設定パラメータ(NVSに保存、再起動後も読込) ----
+// 実行中の調整は別途実装するWebサーバーのAPI経由で行う想定(未実装。現状は起動時のNVS/初期値のみ)。
 static const char *NVS_NAMESPACE = "toilet";
 static const char *NVS_KEY_SENSITIVITY = "sensitivity";
 static const char *NVS_KEY_MAX_GATE = "max_gate";
@@ -110,11 +120,6 @@ unsigned long enteringSinceMs = 0;
 bool audioActive = false; // フェードイン状態(常時再生中、これは音量表現上の状態)
 bool flushNeeded = false; // 滞在処理で立てる「トイレ流し必要」フラグ(退室処理で消費)
 
-// ---- 設定画面 ----
-enum class SettingParam : uint8_t { SENSITIVITY = 0, MAX_GATE = 1, STAY_DURATION = 2, COUNT = 3 };
-bool inSettingsMode = false;
-SettingParam selectedParam = SettingParam::SENSITIVITY;
-
 // ---- 関数宣言 ----
 void loadParams();
 void saveParams();
@@ -129,19 +134,14 @@ void fadeVolume(uint8_t fromVolume, uint8_t toVolume);
 void audioFadeIn();
 void audioFadeOut();
 void sendToiletFlush();
+void setStatusLed(uint32_t color, uint8_t brightness);
 void updateOccupancy();
-void handleButtons();
-void updateDisplay();
-void drawNormalScreen();
-void drawSettingsScreen();
 void printStatus();
 
 void setup() {
     auto cfg = M5.config();
-    cfg.internal_spk = false; // 本体スピーカーは使用しない(ノイズ防止)
     M5.begin(cfg);
     Serial.begin(115200);
-    M5.Power.setExtOutput(true);
 
     loadParams();
 
@@ -178,24 +178,32 @@ void setup() {
 
     irSender.begin();
 
-    connectWiFi();
-    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    if (ENABLE_MQTT) {
+        connectWiFi();
+        mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    } else {
+        Serial.println("[MQTT] 一時停止中(ENABLE_MQTT=false)");
+    }
 
-    updateDisplay();
+    setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF); // 起動時は退室状態として消灯
 }
 
 void loop() {
     M5.update();
-    maintainMqtt();
+    if (ENABLE_MQTT) maintainMqtt();
+
+    if (M5.BtnA.wasPressed()) {
+        // 本体ボタン(G0)押下でトイレ流しを手動送信
+        sendToiletFlush();
+    }
+
     // 新しいフレームを受信した時だけデバウンスを更新する。
     // 毎ループ呼ぶと、loopの回転がセンサーのフレーム間隔より速いために
     // カウンタが実際のセンサー更新回数を無視して一瞬で振り切れてしまう。
     if (radar.read()) {
         updatePresenceDebounce();
     }
-    handleButtons();
     updateOccupancy();
-    updateDisplay();
     printStatus();
     delay(20);
 }
@@ -228,6 +236,7 @@ void updateOccupancy() {
                 roomState = RoomState::ENTERING;
                 enteringSinceMs = now;
                 Serial.println("[STATE] 入室検知");
+                setStatusLed(TFT_RED, LED_BRIGHTNESS_ACTIVE);
                 audioFadeIn();
             }
             break;
@@ -237,11 +246,13 @@ void updateOccupancy() {
                 // トイレ退室検知 → トイレ退室処理(滞在前のため流さない)
                 roomState = RoomState::VACANT;
                 Serial.println("[STATE] 退室検知(滞在前)");
+                setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF);
                 audioFadeOut();
             } else if (now - enteringSinceMs >= (unsigned long)stayDurationSec * 1000UL) {
                 // トイレ滞在開始検知 → トイレ滞在処理
                 roomState = RoomState::STAYING;
                 Serial.println("[STATE] 滞在開始検知");
+                setStatusLed(TFT_YELLOW, LED_BRIGHTNESS_ACTIVE);
                 flushNeeded = true;
             }
             break;
@@ -251,6 +262,7 @@ void updateOccupancy() {
                 // トイレ退室検知 → トイレ退室処理
                 roomState = RoomState::VACANT;
                 Serial.println("[STATE] 退室検知");
+                setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF);
                 audioFadeOut();
                 if (flushNeeded) {
                     sendToiletFlush();
@@ -261,50 +273,9 @@ void updateOccupancy() {
     }
 }
 
-void handleButtons() {
-    if (inSettingsMode) {
-        if (M5.BtnB.wasPressed()) {
-            // 選択中のパラメータ項目を次の項目に切り替える(ループ)
-            selectedParam = static_cast<SettingParam>(
-                (static_cast<uint8_t>(selectedParam) + 1) % static_cast<uint8_t>(SettingParam::COUNT));
-        }
-
-        if (M5.BtnC.wasPressed()) {
-            // 選択中のパラメータの値を1段階増加(上限を超えたら下限に戻る)。即座にセンサー・状態判定へ反映
-            switch (selectedParam) {
-                case SettingParam::SENSITIVITY:
-                    sensitivity = (sensitivity >= SENSITIVITY_MAX) ? SENSITIVITY_MIN : sensitivity + SENSITIVITY_STEP;
-                    applySensitivity();
-                    break;
-                case SettingParam::MAX_GATE:
-                    maxGate = (maxGate >= MAX_GATE_MAX) ? MAX_GATE_MIN : maxGate + MAX_GATE_STEP;
-                    applyMaxGate();
-                    break;
-                case SettingParam::STAY_DURATION:
-                default:
-                    stayDurationSec = (stayDurationSec >= STAY_DURATION_MAX) ? STAY_DURATION_MIN : stayDurationSec + STAY_DURATION_STEP;
-                    break;
-            }
-        }
-
-        if (M5.BtnA.wasPressed()) {
-            // 選択中の変更内容を確定し、3項目まとめてNVSに保存したうえで通常画面に戻る
-            saveParams();
-            inSettingsMode = false;
-        }
-    } else {
-        if (M5.BtnA.wasPressed()) {
-            // 設定画面に入る(先頭の項目「感度」が選択された状態で表示される)
-            inSettingsMode = true;
-            selectedParam = SettingParam::SENSITIVITY;
-        }
-
-        if (M5.BtnB.wasPressed()) {
-            // トイレ流し
-            sendToiletFlush();
-        }
-        // ボタンCは通常画面では使用しない
-    }
+void setStatusLed(uint32_t color, uint8_t brightness) {
+    M5.Led.setAllColor(color);
+    M5.Led.setBrightness(brightness);
 }
 
 void fadeVolume(uint8_t fromVolume, uint8_t toVolume) {
@@ -337,112 +308,6 @@ void audioFadeOut() {
 void sendToiletFlush() {
     irSender.sendRaw(kIrRawData, kIrRawLen, IR_FREQUENCY_KHZ);
     Serial.println("[IR] トイレ流し送信");
-}
-
-void updateDisplay() {
-    static bool firstDraw = true;
-    static bool lastInSettingsMode = false;
-    static RoomState lastRoomState = RoomState::VACANT;
-    static SettingParam lastParam = SettingParam::SENSITIVITY;
-    static uint8_t lastSensitivity = 0;
-    static uint8_t lastMaxGate = 0;
-    static uint16_t lastStayDuration = 0;
-
-    if (inSettingsMode) {
-        bool changed = firstDraw || !lastInSettingsMode || lastParam != selectedParam ||
-                       lastSensitivity != sensitivity || lastMaxGate != maxGate ||
-                       lastStayDuration != stayDurationSec;
-        if (changed) {
-            drawSettingsScreen();
-            lastParam = selectedParam;
-            lastSensitivity = sensitivity;
-            lastMaxGate = maxGate;
-            lastStayDuration = stayDurationSec;
-        }
-    } else {
-        bool changed = firstDraw || lastInSettingsMode || lastRoomState != roomState;
-        if (changed) {
-            drawNormalScreen();
-            lastRoomState = roomState;
-        }
-    }
-
-    lastInSettingsMode = inSettingsMode;
-    firstDraw = false;
-}
-
-void drawNormalScreen() {
-    uint32_t color;
-    uint8_t brightness;
-    const char *label;
-    switch (roomState) {
-        case RoomState::ENTERING:
-            color = TFT_RED;
-            brightness = LCD_BRIGHTNESS_ACTIVE;
-            label = "ENTERING";
-            break;
-        case RoomState::STAYING:
-            color = TFT_YELLOW;
-            brightness = LCD_BRIGHTNESS_ACTIVE;
-            label = "STAYING";
-            break;
-        default:
-            color = TFT_GREEN;
-            brightness = LCD_BRIGHTNESS_VACANT;
-            label = "VACANT";
-            break;
-    }
-
-    M5.Display.setBrightness(brightness);
-    M5.Display.fillScreen(color);
-    M5.Display.setTextColor(TFT_BLACK, color);
-    M5.Display.setTextSize(2);
-    M5.Display.setCursor(10, 10);
-    M5.Display.print(label);
-}
-
-void drawSettingsScreen() {
-    const char *name;
-    char valueText[24];
-    char rangeText[24];
-    switch (selectedParam) {
-        case SettingParam::SENSITIVITY:
-            name = "感度";
-            snprintf(valueText, sizeof(valueText), "%d", sensitivity);
-            snprintf(rangeText, sizeof(rangeText), "0-100");
-            break;
-        case SettingParam::MAX_GATE:
-            name = "ゲート";
-            snprintf(valueText, sizeof(valueText), "%d", maxGate);
-            snprintf(rangeText, sizeof(rangeText), "1-8");
-            break;
-        case SettingParam::STAY_DURATION:
-        default:
-            name = "滞在継続時間";
-            snprintf(valueText, sizeof(valueText), "%d秒", stayDurationSec);
-            snprintf(rangeText, sizeof(rangeText), "5-60秒");
-            break;
-    }
-
-    M5.Display.setBrightness(LCD_BRIGHTNESS_ACTIVE);
-    M5.Display.fillScreen(TFT_BLACK);
-    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-
-    M5.Display.setTextSize(2);
-    M5.Display.setCursor(10, 10);
-    M5.Display.print(name);
-
-    M5.Display.setTextSize(3);
-    M5.Display.setCursor(10, 45);
-    M5.Display.print(valueText);
-
-    M5.Display.setTextSize(1);
-    M5.Display.setCursor(10, 90);
-    M5.Display.printf("range: %s", rangeText);
-
-    M5.Display.setTextSize(1);
-    M5.Display.setCursor(10, 220);
-    M5.Display.print("B:項目切替 C:値調整 A:決定");
 }
 
 void loadParams() {
@@ -554,7 +419,7 @@ void publishDiscoveryConfig() {
         "\"availability_topic\":\"%s\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
-        "\"device\":{\"identifiers\":[\"auto_toilet_m5stack\"],\"name\":\"Auto Toilet\",\"manufacturer\":\"M5Stack + DIY\",\"model\":\"M5Stack Grey + LD2410\"}"
+        "\"device\":{\"identifiers\":[\"auto_toilet_m5stack\"],\"name\":\"Auto Toilet\",\"manufacturer\":\"M5Stack + DIY\",\"model\":\"M5StampS3 + LD2410\"}"
         "}",
         MQTT_PRESENCE_STATE_TOPIC, MQTT_AVAILABILITY_TOPIC);
     mqttClient.publish(MQTT_DISCOVERY_TOPIC, payload, true);
@@ -575,8 +440,8 @@ void printStatus() {
                                  ? "VACANT"
                                  : (roomState == RoomState::ENTERING ? "ENTERING" : "STAYING");
 
-    Serial.printf("[STATUS] presence(raw)=%s presence(smoothed)=%s state=%s sensitivity=%d gate=%d stayDuration=%ds audio=%s settings=%s wifi=%s mqtt=%s\n",
+    Serial.printf("[STATUS] presence(raw)=%s presence(smoothed)=%s state=%s sensitivity=%d gate=%d stayDuration=%ds audio=%s wifi=%s mqtt=%s\n",
                   radar.presenceDetected() ? "YES" : "NO", smoothedPresence ? "YES" : "NO", stateName, sensitivity,
-                  maxGate, stayDurationSec, audioActive ? "ON" : "OFF", inSettingsMode ? "ON" : "OFF",
+                  maxGate, stayDurationSec, audioActive ? "ON" : "OFF",
                   WiFi.status() == WL_CONNECTED ? "OK" : "NG", mqttClient.connected() ? "OK" : "NG");
 }

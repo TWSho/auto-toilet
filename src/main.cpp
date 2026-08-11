@@ -7,6 +7,14 @@
 #include <IRsend.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
+
+#include "state.h"
+#include "toilet_ir.h"
+#include "bgm_control.h"
+#include "led_control.h"
+#include "scenes.h"
+#include "web_api.h"
 
 // ============================================================
 // ハードウェア接続 (M5StampS3 PIN2.54版)
@@ -25,23 +33,16 @@
 static const int RADAR_RX_PIN = 7; // StampS3 RX ← LD2410 TX
 static const int RADAR_TX_PIN = 9; // StampS3 TX → LD2410 RX
 static const uint32_t RADAR_BAUD = 256000;
-static const int AUDIO_TX_PIN = 3;  // StampS3 TX → Audio Playerモジュール RX
-static const int AUDIO_RX_PIN = 5;  // StampS3 RX ← Audio Playerモジュール TX
+static const int AUDIO_TX_PIN = 5;  // StampS3 TX → Audio Playerモジュール RX
+static const int AUDIO_RX_PIN = 3;  // StampS3 RX ← Audio Playerモジュール TX
 static const int IR_TX_PIN = 1;     // 赤外線LED送信回路(自作)への出力
-
-static const char *AUDIO_FILE_NAME = "mori.mp3";
-static const uint8_t AUDIO_VOLUME = 20;       // 通常再生時の音量(0-30)
-static const uint8_t AUDIO_FADE_STEPS = 10;   // フェードの分割数
-static const unsigned long AUDIO_FADE_STEP_MS = 200; // フェード1段あたりの待機時間(合計2000ms)
 
 static const uint8_t LED_BRIGHTNESS_ACTIVE = 179; // 入室・滞在中 約70%
 static const uint8_t LED_BRIGHTNESS_OFF = 0;      // 退室中 消灯
 
-// ---- 赤外線送信(トイレ流し) ----
+// ---- 赤外線送信 ----
 IRsend irSender(IR_TX_PIN);
-static const uint16_t kIrRawData[] = {5930, 2964, 568, 578, 542, 1700, 542, 554, 566, 554, 566, 552, 566, 552, 540, 576, 542, 576, 542, 576,540, 550, 564, 550, 564, 1672, 568, 552, 542, 576, 542, 576, 542, 576, 540, 550, 566, 550, 564, 552, 566, 550, 538, 576, 540, 574, 540, 576,540, 1668, 566, 552, 566, 1672, 542, 1700, 544, 578, 542, 1676, 568, 1678, 544, 580, 542, 1702, 544, 580, 542, 1676, 568, 1678, 542, 580, 542, 1702, 544, 1678, 568, 554, 568, 32920, 5932, 2964, 570, 578, 542, 1674, 568, 554, 568, 552, 566, 552, 566, 550, 540, 576, 542, 578, 540, 576, 540, 550, 564, 552, 564, 1670, 540, 578, 542, 576, 542, 578, 540, 576, 540, 552, 564, 550, 566, 550, 564, 550, 538, 574, 540, 574, 542, 574, 540, 1670, 566, 552, 566, 1672, 542, 1702, 542, 580, 542, 1676, 568, 1678, 542, 580, 542, 1702, 544, 552, 568, 1676, 568, 1678, 542, 580,542, 1702, 544, 1678, 568, 554, 568};
-static const uint16_t kIrRawLen = 163;
-static const uint16_t IR_FREQUENCY_KHZ = 38;
+const uint16_t IR_FREQUENCY_KHZ = 38;
 
 // ---- ミリ波センサー(LD2410) ----
 ld2410 radar;
@@ -66,7 +67,9 @@ bool smoothedPresence = false;
 // binary_sensor(occupancy)が自動で登録される。
 // ★ SSID/パスワード/ブローカーIPは環境に合わせて書き換えること
 // ★人感センサー単体の動作確認用に一時停止中。再開する場合はtrueに戻す。
-static const bool ENABLE_MQTT = false;
+// WebUI/WLED連携にはWiFi接続が必要なため、この値に関わらずWiFiへは常時接続する
+// (下記setup()参照。ENABLE_MQTTはMQTTブローカーへの接続要否のみを制御する)。
+const bool ENABLE_MQTT = false;
 
 static const char *WIFI_SSID = "4017-5Gs";
 static const char *WIFI_PASSWORD = "77777777";
@@ -80,8 +83,9 @@ static const char *MQTT_AVAILABILITY_TOPIC = "auto-toilet/status";
 static const char *MQTT_PRESENCE_STATE_TOPIC = "auto-toilet/presence/state";
 static const char *MQTT_DISCOVERY_TOPIC = "homeassistant/binary_sensor/auto_toilet_presence/config";
 
-static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;   // 起動時のWiFi接続待ち上限
-static const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000; // WiFi/MQTT再接続の試行間隔
+static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;    // 起動時のWiFi接続待ち上限
+static const unsigned long WIFI_RECONNECT_INTERVAL_MS = 5000;  // WiFi再接続の試行間隔
+static const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;  // MQTTブローカー再接続の試行間隔
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -94,7 +98,7 @@ static const unsigned long AUDIO_INIT_RETRY_DELAY_MS = 500;
 Preferences prefs;
 
 // ---- 設定パラメータ(NVSに保存、再起動後も読込) ----
-// 実行中の調整は別途実装するWebサーバーのAPI経由で行う想定(未実装。現状は起動時のNVS/初期値のみ)。
+// WebUIバックエンドAPI(GET/PUT /api/settings, POST /api/settings/save)経由で調整する。
 static const char *NVS_NAMESPACE = "toilet";
 static const char *NVS_KEY_SENSITIVITY = "sensitivity";
 static const char *NVS_KEY_MAX_GATE = "max_gate";
@@ -104,36 +108,26 @@ static const uint8_t DEFAULT_SENSITIVITY = 20;      // 感度 初期値
 static const uint8_t DEFAULT_MAX_GATE = 1;          // ゲート 初期値(1ゲート=0.75m)
 static const uint16_t DEFAULT_STAY_DURATION_SEC = 20; // 滞在継続時間 初期値
 
-static const uint8_t SENSITIVITY_MIN = 0, SENSITIVITY_MAX = 100, SENSITIVITY_STEP = 10;
-static const uint8_t MAX_GATE_MIN = 1, MAX_GATE_MAX = 8, MAX_GATE_STEP = 1;
-static const uint16_t STAY_DURATION_MIN = 5, STAY_DURATION_MAX = 60, STAY_DURATION_STEP = 5;
-
 uint8_t sensitivity = DEFAULT_SENSITIVITY;
 uint8_t maxGate = DEFAULT_MAX_GATE;
 uint16_t stayDurationSec = DEFAULT_STAY_DURATION_SEC;
 
 // ---- 在室状態 ----
-enum class RoomState { VACANT, ENTERING, STAYING };
 RoomState roomState = RoomState::VACANT;
 unsigned long enteringSinceMs = 0;
 
-bool audioActive = false; // フェードイン状態(常時再生中、これは音量表現上の状態)
 bool flushNeeded = false; // 滞在処理で立てる「トイレ流し必要」フラグ(退室処理で消費)
 
 // ---- 関数宣言 ----
 void loadParams();
-void saveParams();
 void applySensitivity();
 void applyMaxGate();
 void updatePresenceDebounce();
 void connectWiFi();
+void maintainWiFi();
 void maintainMqtt();
 void publishDiscoveryConfig();
 void publishPresenceState(bool presence);
-void fadeVolume(uint8_t fromVolume, uint8_t toVolume);
-void audioFadeIn();
-void audioFadeOut();
-void sendToiletFlush();
 void setStatusLed(uint32_t color, uint8_t brightness);
 void updateOccupancy();
 void printStatus();
@@ -144,6 +138,7 @@ void setup() {
     Serial.begin(115200);
 
     loadParams();
+    toiletIrBegin();
 
     radarSerial.begin(RADAR_BAUD, SERIAL_8N1, RADAR_RX_PIN, RADAR_TX_PIN);
     Serial.println("[RADAR] LD2410 初期化中...");
@@ -163,34 +158,41 @@ void setup() {
             delay(AUDIO_INIT_RETRY_DELAY_MS);
         }
     }
-
     if (audioAvailable) {
-        // 常に再生し続け、開始・停止は音量で表現する
-        audioPlayer.setPlayMode(AUDIO_PLAYER_MODE_SINGLE_LOOP); // 最後まで再生したら最初から再生
-        audioPlayer.setVolume(0);
-        audioPlayer.playAudioByName(AUDIO_FILE_NAME);
-        delay(300); // モジュールがファイルを読み込むのを待つ
-        audioPlayer.setVolume(0);
-        Serial.println("[AUDIO] Audio Playerモジュールの準備完了(常時再生・無音)");
+        Serial.println("[AUDIO] Audio Playerモジュールの準備完了");
+        // デバッグ: SDカード上でモジュールが認識しているファイル数を確認する
+        // (playAudioByNameが応答しない問題が、ファイル名不一致なのか初期化タイミングなのか切り分けるため)
+        uint16_t totalAudio = audioPlayer.getTotalAudioNumber();
+        uint16_t pathFileCount = audioPlayer.getCurrentPathFileCount();
+        Serial.printf("[AUDIO][DEBUG] getTotalAudioNumber=%u getCurrentPathFileCount=%u\n", totalAudio, pathFileCount);
     } else {
         Serial.println("[WARN] Audio Playerモジュールが未接続のため、音声再生なしで起動します");
     }
+    bgmControlBegin(); // 常に先頭曲をロードし無音(volume=0)で待機状態にする
 
     irSender.begin();
 
+    // WebUI・WLED連携にはWiFi接続が必須のため、ENABLE_MQTTの値に関わらず接続する。
+    connectWiFi();
     if (ENABLE_MQTT) {
-        connectWiFi();
         mqttClient.setServer(MQTT_HOST, MQTT_PORT);
     } else {
         Serial.println("[MQTT] 一時停止中(ENABLE_MQTT=false)");
     }
+
+    ledControlBegin();
+    scenesBegin();
+    webApiBegin();
 
     setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF); // 起動時は退室状態として消灯
 }
 
 void loop() {
     M5.update();
+    maintainWiFi();
     if (ENABLE_MQTT) maintainMqtt();
+    ledTick();
+    bgmTick();
 
     if (M5.BtnA.wasPressed()) {
         // 本体ボタン(G0)押下でトイレ流しを手動送信
@@ -237,7 +239,7 @@ void updateOccupancy() {
                 enteringSinceMs = now;
                 Serial.println("[STATE] 入室検知");
                 setStatusLed(TFT_RED, LED_BRIGHTNESS_ACTIVE);
-                audioFadeIn();
+                bgmSetPlayingFromOccupancy(true);
             }
             break;
 
@@ -247,7 +249,7 @@ void updateOccupancy() {
                 roomState = RoomState::VACANT;
                 Serial.println("[STATE] 退室検知(滞在前)");
                 setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF);
-                audioFadeOut();
+                bgmSetPlayingFromOccupancy(false);
             } else if (now - enteringSinceMs >= (unsigned long)stayDurationSec * 1000UL) {
                 // トイレ滞在開始検知 → トイレ滞在処理
                 roomState = RoomState::STAYING;
@@ -263,7 +265,7 @@ void updateOccupancy() {
                 roomState = RoomState::VACANT;
                 Serial.println("[STATE] 退室検知");
                 setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF);
-                audioFadeOut();
+                bgmSetPlayingFromOccupancy(false);
                 if (flushNeeded) {
                     sendToiletFlush();
                 }
@@ -278,36 +280,12 @@ void setStatusLed(uint32_t color, uint8_t brightness) {
     M5.Led.setBrightness(brightness);
 }
 
-void fadeVolume(uint8_t fromVolume, uint8_t toVolume) {
-    if (fromVolume == toVolume) {
-        audioPlayer.setVolume(toVolume);
-        return;
-    }
-    for (uint8_t i = 1; i <= AUDIO_FADE_STEPS; i++) {
-        int16_t v = (int16_t)fromVolume + ((int32_t)((int16_t)toVolume - (int16_t)fromVolume) * i) / AUDIO_FADE_STEPS;
-        audioPlayer.setVolume((uint8_t)v);
-        delay(AUDIO_FADE_STEP_MS);
-    }
-}
-
-void audioFadeIn() {
-    if (!audioAvailable) return; // モジュール未接続時は何もしない
-    audioActive = true;
-    fadeVolume(0, AUDIO_VOLUME);
-    Serial.println("[AUDIO] フェードイン(再生開始)");
-}
-
-void audioFadeOut() {
-    if (!audioAvailable) return; // モジュール未接続時は何もしない
-    uint8_t currentVolume = audioPlayer.getVolume();
-    fadeVolume(currentVolume, 0);
-    audioActive = false;
-    Serial.println("[AUDIO] フェードアウト(再生停止)");
-}
-
 void sendToiletFlush() {
-    irSender.sendRaw(kIrRawData, kIrRawLen, IR_FREQUENCY_KHZ);
-    Serial.println("[IR] トイレ流し送信");
+    // 本体ボタン用の単発「流す」送信。WebUI経由のflush_largeコマンドと同じ
+    // 実行経路(IR送信+クールダウン)を共有する。
+    JsonDocument doc;
+    JsonObject state = doc.to<JsonObject>();
+    toiletIrExecute("flush_large", state);
 }
 
 void loadParams() {
@@ -363,21 +341,23 @@ void connectWiFi() {
     }
 }
 
-// WiFi/MQTTの接続維持を行う。ブロッキングを避けるため、切断中は
-// MQTT_RECONNECT_INTERVAL_MSごとに再接続を試みるだけで即座に戻る。
-void maintainMqtt() {
+// WiFiの接続維持を行う(WebUI/WLED連携・MQTT共通)。ブロッキングを避けるため、
+// 切断中はWIFI_RECONNECT_INTERVAL_MSごとに再接続を試みるだけで即座に戻る。
+void maintainWiFi() {
     static unsigned long lastReconnectAttemptMs = 0;
+    if (WiFi.status() == WL_CONNECTED) return;
+    unsigned long now = millis();
+    if (now - lastReconnectAttemptMs < WIFI_RECONNECT_INTERVAL_MS) return;
+    lastReconnectAttemptMs = now;
+    Serial.println("[WIFI] 再接続を試みます");
+    WiFi.reconnect();
+}
 
-    if (WiFi.status() != WL_CONNECTED) {
-        unsigned long now = millis();
-        if (now - lastReconnectAttemptMs >= MQTT_RECONNECT_INTERVAL_MS) {
-            lastReconnectAttemptMs = now;
-            Serial.println("[WIFI] 再接続を試みます");
-            WiFi.reconnect();
-        }
-        return;
-    }
+// MQTTブローカーへの接続維持を行う(ENABLE_MQTT=trueの場合のみ呼ばれる)。
+void maintainMqtt() {
+    if (WiFi.status() != WL_CONNECTED) return;
 
+    static unsigned long lastReconnectAttemptMs = 0;
     if (!mqttClient.connected()) {
         unsigned long now = millis();
         if (now - lastReconnectAttemptMs < MQTT_RECONNECT_INTERVAL_MS) return;
@@ -442,6 +422,6 @@ void printStatus() {
 
     Serial.printf("[STATUS] presence(raw)=%s presence(smoothed)=%s state=%s sensitivity=%d gate=%d stayDuration=%ds audio=%s wifi=%s mqtt=%s\n",
                   radar.presenceDetected() ? "YES" : "NO", smoothedPresence ? "YES" : "NO", stateName, sensitivity,
-                  maxGate, stayDurationSec, audioActive ? "ON" : "OFF",
+                  maxGate, stayDurationSec, bgmIsPlaying() ? "ON" : "OFF",
                   WiFi.status() == WL_CONNECTED ? "OK" : "NG", mqttClient.connected() ? "OK" : "NG");
 }

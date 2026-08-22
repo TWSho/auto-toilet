@@ -112,6 +112,11 @@ uint8_t sensitivity = DEFAULT_SENSITIVITY;
 uint8_t maxGate = DEFAULT_MAX_GATE;
 uint16_t stayDurationSec = DEFAULT_STAY_DURATION_SEC;
 
+// loadParams()/saveParams()でのみ更新する「NVS保存済み」スナップショット。
+uint8_t savedSensitivity = DEFAULT_SENSITIVITY;
+uint8_t savedMaxGate = DEFAULT_MAX_GATE;
+uint16_t savedStayDurationSec = DEFAULT_STAY_DURATION_SEC;
+
 // ---- 在室状態 ----
 RoomState roomState = RoomState::VACANT;
 unsigned long enteringSinceMs = 0;
@@ -297,6 +302,11 @@ void loadParams() {
         stayDurationSec = prefs.getUShort(NVS_KEY_STAY_SEC);
     }
     prefs.end();
+    // 起動直後は「ライブ値」=「NVS保存済み値」(NVSが空の場合はデフォルト値)なので、
+    // dirty判定の基準となるスナップショットもここで同期しておく。
+    savedSensitivity = sensitivity;
+    savedMaxGate = maxGate;
+    savedStayDurationSec = stayDurationSec;
 
     if (hasAll) {
         Serial.printf("[NVS] 設定値を読込: 感度=%d ゲート=%d 滞在継続時間=%d秒\n", sensitivity, maxGate, stayDurationSec);
@@ -311,6 +321,9 @@ void saveParams() {
     prefs.putUChar(NVS_KEY_MAX_GATE, maxGate);
     prefs.putUShort(NVS_KEY_STAY_SEC, stayDurationSec);
     prefs.end();
+    savedSensitivity = sensitivity;
+    savedMaxGate = maxGate;
+    savedStayDurationSec = stayDurationSec;
     Serial.printf("[NVS] 設定値を保存: 感度=%d ゲート=%d 滞在継続時間=%d秒\n", sensitivity, maxGate, stayDurationSec);
 }
 

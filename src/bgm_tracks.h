@@ -12,19 +12,18 @@ struct BgmTrack {
 };
 
 static const BgmTrack kBgmTracks[] = {
-    // fileNameは表示名(title)と異なり、SDカード上の実ファイル名。
     // M5UnitAudioPlayerライブラリのplayAudioByName()は27文字を超えるファイル名を
     // 渡すとバッファオーバーフローで再起動する制約があるため(bgm_control.cpp参照)、
-    // 元の「At last I can breathe freely#N.mp3」(34文字)から「freely」を除いて
-    // 27文字に短縮している。SDカード側のファイル名もこれに合わせてリネームすること。
-    {"1", "At last I can breathe freely#1", "At last I can breathe#1.mp3"},
-    {"2", "At last I can breathe freely#2", "At last I can breathe#2.mp3"},
-    {"3", "At last I can breathe freely#3", "At last I can breathe#3.mp3"},
-    {"4", "At last I can breathe freely#4", "At last I can breathe#4.mp3"},
-    {"5", "At last I can breathe freely#5", "At last I can breathe#5.mp3"},
-    {"6", "At last I can breathe freely#6", "At last I can breathe#6.mp3"},
-    {"7", "At last I can breathe freely#7", "At last I can breathe#7.mp3"},
-    {"8", "At last I can breathe freely#8", "At last I can breathe#8.mp3"},
+    // 元の「At last I can breathe freely#N.mp3」(34文字)から「freely」だけを残す形に
+    // 曲名・ファイル名ともにリネーム済み(SDカード側も対応済み)。
+    {"1", "freely#1", "freely#1.mp3"},
+    {"2", "freely#2", "freely#2.mp3"},
+    {"3", "freely#3", "freely#3.mp3"},
+    {"4", "freely#4", "freely#4.mp3"},
+    {"5", "freely#5", "freely#5.mp3"},
+    {"6", "freely#6", "freely#6.mp3"},
+    {"7", "freely#7", "freely#7.mp3"},
+    {"8", "freely#8", "freely#8.mp3"},
     {"9", "The Forest Path#1", "The Forest Path#1.mp3"},
     {"10", "The Forest Path#2", "The Forest Path#2.mp3"},
     {"11", "The Forest Path#3", "The Forest Path#3.mp3"},

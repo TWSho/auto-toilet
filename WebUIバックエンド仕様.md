@@ -78,22 +78,23 @@ struct IrCommand {
 
 | id | 対応UI | kind | 実装状況 |
 |---|---|---|---|
-| flush_large | 流す(大) ／ 自動流し(現行仕様) | momentary | 実装済み（既存の`kIrRawData`をそのまま割当） |
-| flush_small | 流す(小) | momentary | 未実装（要収録） |
-| flush_eco | 流す(ECO) | momentary | 未実装（要収録） |
-| spray_off | 洗浄スプレー「止」 | select | 未実装 |
-| spray_rear | 洗浄スプレー「おしり」 | select | 未実装 |
-| spray_soft | 洗浄スプレー「やわらか」 | select | 未実装 |
-| spray_bidet | 洗浄スプレー「ビデ」 | select | 未実装 |
-| water_pressure_up | 水勢「強」 | step | 未実装 |
-| water_pressure_down | 水勢「弱」 | step | 未実装 |
-| nozzle_position_forward | 洗浄位置「前」 | step | 未実装 |
-| nozzle_position_backward | 洗浄位置「後」 | step | 未実装 |
-| seat_temp_cycle | 便座温度（低→中→高→低） | cycle | 未実装 |
-| water_temp_cycle | 温水温度（低→中→高→低） | cycle | 未実装 |
-| deodorizer_on / deodorizer_off | パワー脱臭 入/切 | toggle | 未実装 |
-| nozzle_clean | ノズルそうじ | momentary | 未実装 |
-| auto_clean_on / auto_clean_off | オート洗浄 入/切 | toggle | 未実装 |
+| flush_large | 流す(大) ／ 自動流し(現行仕様) | momentary | 実装済み |
+| flush_small | 流す(小) | momentary | 実装済み |
+| flush_eco | 流す(ECO) | momentary | 実装済み |
+| spray_off | 洗浄スプレー「止」 | select | 実装済み |
+| spray_rear | 洗浄スプレー「おしり」 | select | 実装済み |
+| spray_soft | 洗浄スプレー「やわらか」 | select | 実装済み |
+| spray_bidet | 洗浄スプレー「ビデ」 | select | 実装済み |
+| water_pressure_up | 水勢「強」 | step | 実装済み（実機はレベル1-5の絶対値ボタン式。目標レベルに応じたレベル別RAWを都度選んで送信） |
+| water_pressure_down | 水勢「弱」 | step | 実装済み（同上） |
+| nozzle_position_forward | 洗浄位置「前」 | step | 実装済み（実機の「前」ボタンが相対移動RAWを送信するためそのまま割当） |
+| nozzle_position_backward | 洗浄位置「後」 | step | 実装済み（同上） |
+| seat_temp_cycle | 便座温度（低→中→高→低） | cycle | 実装済み（実機は低/中/高の絶対値ボタン式。目標レベルに応じたレベル別RAWを都度選んで送信） |
+| water_temp_cycle | 温水温度（低→中→高→低） | cycle | 実装済み（同上） |
+| deodorizer_on | パワー脱臭 入 | toggle | 実装済み（収録コード名は「パワー脱臭1」） |
+| deodorizer_off | パワー脱臭 切 | toggle | 未実装（「切」に相当するコード未収録） |
+| nozzle_clean | ノズルそうじ | momentary | 実装済み |
+| auto_clean_on / auto_clean_off | オート洗浄 入/切 | toggle | 実装済み |
 
 **kindごとの意味と、実行時にバックエンドが更新する「追跡状態」（トイレはIR送信のみで実機からの状態読み出しができないため、ソフトウェア側で現在値を保持しUIに返す。物理リモコン操作や電源断で実機とズレる可能性がある点は既知の制約とする）:**
 - `momentary`: 単発動作。追跡状態は変更しない（flush系・nozzle_clean）
@@ -101,6 +102,8 @@ struct IrCommand {
 - `toggle`: ON/OFF。対応するbool追跡状態を設定する
 - `step`: 相対増減。追跡状態を1段階だけ増減し、範囲（水勢1-5、洗浄位置1-5）でクランプする
 - `cycle`: 単一ボタンで循環。追跡状態を1段階進め、最大値の次は先頭に戻す（3段階）
+
+**水勢／便座温度／温水温度の実装補足:** 実機リモコンはレベル・温度ごとに個別の絶対値RAWコードを送信する方式で、相対的な「+/-」や「巡回」専用のRAWコードは存在しない。そのためファームウェア側では`step`/`cycle`のUI操作を受けた際、まず追跡状態から目標レベルを算出し、そのレベルに対応するRAWデータ（`kWaterPressureRaw[]`・`kSeatTempRaw[]`・`kWaterTempRaw[]`、`src/toilet_ir.cpp`）を選んで送信してから追跡状態を更新する。UI・API（id/kind/クランプ範囲）は変更しない。
 
 追跡状態は`sensitivity`等と同様にNVSへ保存し、再起動後も直前の値を保持する。
 
@@ -127,6 +130,8 @@ struct IrCommand {
 
 曲一覧は全27曲（`SONGS`相当）をファームウェア側にハードコードし、SDカード上の実ファイル名と対応させる。モジュールにファイル一覧やメタデータ（曲名）を取得するAPIはないため、手動で対応表を保守する。曲名からアーティスト情報は取得できず、フロント側でも使用しないため`artist`フィールドは廃止した。
 
+M5UnitAudioPlayerライブラリの`playAudioByName()`は27文字を超えるファイル名を渡すとバッファオーバーフローで再起動する制約があるため、27文字を超える曲は曲名・ファイル名ともに短縮してある（例: 「At last I can breathe freely#1.mp3」(34文字)→「freely#1」。SDカード側のファイル名もリネーム済み）。
+
 ```cpp
 struct BgmTrack {
   const char* id;
@@ -139,14 +144,14 @@ struct BgmTrack {
 
 | id | title | fileName |
 |---|---|---|
-| 1 | At last I can breathe freely#1 | At last I can breathe freely#1.mp3 |
-| 2 | At last I can breathe freely#2 | At last I can breathe freely#2.mp3 |
-| 3 | At last I can breathe freely#3 | At last I can breathe freely#3.mp3 |
-| 4 | At last I can breathe freely#4 | At last I can breathe freely#4.mp3 |
-| 5 | At last I can breathe freely#5 | At last I can breathe freely#5.mp3 |
-| 6 | At last I can breathe freely#6 | At last I can breathe freely#6.mp3 |
-| 7 | At last I can breathe freely#7 | At last I can breathe freely#7.mp3 |
-| 8 | At last I can breathe freely#8 | At last I can breathe freely#8.mp3 |
+| 1 | freely#1 | freely#1.mp3 |
+| 2 | freely#2 | freely#2.mp3 |
+| 3 | freely#3 | freely#3.mp3 |
+| 4 | freely#4 | freely#4.mp3 |
+| 5 | freely#5 | freely#5.mp3 |
+| 6 | freely#6 | freely#6.mp3 |
+| 7 | freely#7 | freely#7.mp3 |
+| 8 | freely#8 | freely#8.mp3 |
 | 9 | The Forest Path#1 | The Forest Path#1.mp3 |
 | 10 | The Forest Path#2 | The Forest Path#2.mp3 |
 | 11 | The Forest Path#3 | The Forest Path#3.mp3 |
@@ -232,10 +237,20 @@ struct BgmTrack {
 `led`は毎回WLEDへ問い合わせるとポーリング頻度分の負荷になるため、直近取得値をキャッシュし数秒に1回だけ実機へ再取得する運用を想定（キャッシュ間隔は実装時に調整）。
 
 ### GET/PUT /api/settings, POST /api/settings/save
-既存仕様のまま（変更なし）。
+フロントエンド仕様書（4.5節）が要求する`{ current, saved, dirty }`形式で返す
+（`current`=ライブ値、`saved`=NVSへ最後に保存された値のスナップショット、
+`dirty`=両者が1項目でも異なるか）。3レスポンスとも同じ形式で統一する。
+
+```json
+{
+  "current": { "sensitivity": 30, "maxGate": 1, "stayDurationSec": 20 },
+  "saved": { "sensitivity": 20, "maxGate": 1, "stayDurationSec": 20 },
+  "dirty": true
+}
+```
 
 - `PUT /api/settings`: 一部のみ指定可。範囲・刻み条件を満たさない場合400、all-or-nothingで適用
-- `POST /api/settings/save`: 現在のライブ値をNVSへ保存
+- `POST /api/settings/save`: 現在のライブ値をNVSへ保存（保存後は`saved`が`current`に一致し`dirty:false`になる）
 
 ### GET /api/toilet/commands
 ```json
@@ -313,7 +328,7 @@ Response 502: WLEDへの転送失敗
 
 ### GET /api/bgm/tracks
 ```json
-{ "tracks": [ { "id": "1", "title": "At last I can breathe freely#1", "fileName": "At last I can breathe freely#1.mp3" } ] }
+{ "tracks": [ { "id": "1", "title": "freely#1", "fileName": "freely#1.mp3" } ] }
 ```
 全27件を返す（一覧は「データモデル > BGM（Audio Playerモジュール）」の表を参照）。
 

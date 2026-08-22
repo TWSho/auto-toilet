@@ -6,6 +6,9 @@
 // そのまま踏襲し、在室検知による自動フェード(旧audioFadeIn/audioFadeOut)と
 // WebUIのBGM操作(play/pause等)は同じ再生状態を共有する
 // (在室検知の自動再生も、WebUI上は「BGMが再生中」として見える)。
+// ただし優先順位は非対称: WebUIから明示的に一時停止された場合、退室するまでは
+// 人感センサー側の再開指示より手動操作を優先する(bgmSetPlayingFromOccupancy参照)。
+// 退室検知による停止は常に手動状態より優先される(安全側)。
 // ============================================================
 #include <Arduino.h>
 #include <ArduinoJson.h>

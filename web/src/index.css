@@ -1,0 +1,559 @@
+:root {
+  --page-bg: #f2f2f4;
+  --surface: #ffffff;
+  --fill-subtle: rgba(28, 28, 30, 0.055);
+  --fill-subtle-press: rgba(22, 22, 230, 0.09);
+  --hairline: rgba(67, 67, 68, 0.08);
+  --divider: rgba(28, 28, 30, 0.12);
+  --track: rgba(28, 28, 30, 0.16);
+
+  --text: #1c1c1e;
+  --text-muted: rgba(28, 28, 30, 0.6);
+  --text-dim: rgba(28, 28, 30, 0.35);
+  --text-on-accent: #ffffff;
+  --text-on-accent-muted: rgba(255, 255, 255, 0.7);
+
+  /* single monotone accent - used everywhere a selected/active/on state
+     needs to read unambiguously (buttons, toggles, sliders). Level dots
+     are the one exception - they use blue as a status indicator.
+     Mid gray rather than near-black - still ~6:1 contrast with white text. */
+  --accent: #292929;
+  --accent-halo: rgba(99, 99, 102, 0.16);
+
+  /* icon-only color - the chrome (cards/buttons/borders) stays monotone,
+     but icon glyphs and their soft badge chips are allowed to carry a
+     module hue for a bit of visual identity/warmth. */
+  --blue: #0a84ff;
+  --blue-halo: rgba(10, 132, 255, 0.16);
+  --purple: #af52de;
+  --purple-tint: rgba(175, 82, 222, 0.14);
+  --red: #ff3b30;
+  --red-tint: rgba(255, 59, 48, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--page-bg);
+  color: var(--text);
+  font-family: "Hiragino Sans", "Yu Gothic", system-ui, -apple-system, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* ---------- app layout ----------
+   実機（10.1インチタブレット、実効ビューポート960x600 @DPR2）に960x600
+   でぴったり収まるよう実測しながらチューニングした値。900px未満では
+   従来通り1カラムにフォールバックする。 */
+.app {
+  position: relative;
+  z-index: 1;
+  height: 100vh;
+  padding: 10px;
+}
+.columns {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 1.6fr 1.05fr 1fr;
+  gap: 10px;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  .app { height: auto; min-height: 100vh; }
+  .columns { grid-template-columns: 1fr; height: auto; }
+}
+
+/* a grid column holding two independent cards stacked top/bottom,
+   splitting the column's height evenly (e.g. LED + BGM). */
+.col-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.col-stack > * { flex: 1 1 0; min-height: 0; }
+
+/* scene column: status card sizes to its content, scene fills the rest. */
+.col-stack--scene > *:first-child { flex: 1 1 auto; }
+.col-stack--scene > *:last-child { flex: 0 0 auto; }
+.status-card.glass-slot--card { height: auto; }
+
+@media (max-width: 900px) {
+  .col-stack { height: auto; }
+  .col-stack > * { flex: none; }
+  .col-stack--scene > *:first-child,
+  .col-stack--scene > *:last-child { flex: none; }
+}
+
+/* ---------- surface: flat white card/button chrome ----------
+   solid white fill, hairline border, a soft low shadow on cards only -
+   no blur, no gloss, no transform on interaction. */
+.glass-slot {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+}
+.glass-slot--card {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 1px 2px rgba(28, 28, 30, 0.04),
+    0 10px 28px rgba(28, 28, 30, 0.06);
+}
+.glass-slot--auto {
+  background: var(--fill-subtle);
+}
+.glass-slot-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  /* match the parent's rounding so inset box-shadows (active-state rings,
+     tint fills) don't get truncated at the corner by the outer overflow
+     clip - a mismatched square-cornered shadow inside a rounded clip is
+     what caused the "corners get cut off" artifact. */
+  border-radius: inherit;
+}
+.glass-slot--card .glass-slot-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .glass-slot--card { height: auto; }
+}
+
+/* ---------- card chrome ---------- */
+.card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.card-body::-webkit-scrollbar { display: none; }
+.primary-zone { display: flex; flex-direction: column; gap: 8px; }
+/* the detail panel is collapsed by default now, so each card's *primary*
+   zone alone has to fill the column height with no leftover whitespace -
+   these per-card gap overrides (plus the per-card sizing further down)
+   are scoped instead of growing the shared rule so one card's fill-up
+   doesn't distort another's proportions. */
+.toilet-card .card-body { gap: 18px; }
+
+/* ---------- glass buttons ---------- */
+.glass-btn { cursor: pointer; }
+.glass-btn-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  outline: none;
+}
+.glass-btn-inner svg { width: 14px; height: 14px; flex-shrink: 0; }
+.glass-btn:active .glass-slot-content { background: var(--fill-subtle-press); }
+
+/* tone-* modifiers all resolve to the same monotone treatment - kept as
+   separate classnames (used by components for semantic grouping) but no
+   longer mapped to distinct hues. Selected/on state is a solid dark fill
+   with light text/icons, which reads as an unambiguous focus indicator. */
+.glass-btn.tone-accent .glass-slot-content,
+.glass-btn.tone-warn .glass-slot-content,
+.glass-btn.tone-danger .glass-slot-content,
+.glass-btn.tone-pink .glass-slot-content {
+  background: var(--fill-subtle);
+}
+.glass-btn.is-active.tone-accent .glass-slot-content,
+.glass-btn.is-active.tone-warn .glass-slot-content,
+.glass-btn.is-active.tone-danger .glass-slot-content,
+.glass-btn.is-active.tone-pink .glass-slot-content {
+  background: var(--accent);
+}
+.glass-btn.is-active.tone-accent .glass-btn-inner,
+.glass-btn.is-active.tone-warn .glass-btn-inner,
+.glass-btn.is-active.tone-danger .glass-btn-inner,
+.glass-btn.is-active.tone-pink .glass-btn-inner {
+  color: var(--text-on-accent);
+}
+.glass-btn.is-active .scene-desc {
+  color: var(--text-on-accent-muted);
+}
+
+.btn-lg .glass-btn-inner { padding: 12px 10px; font-size: 13px; }
+.btn-sm .glass-btn-inner { padding: 7px 10px; font-size: 12px; }
+
+/* ---------- toilet ---------- */
+.toilet-topbar { display: flex; gap: 6px; }
+.toilet-topbar .glass-slot { flex: 1; }
+.toilet-topbar .glass-btn-inner { padding: 9px 4px; font-size: 13px; flex-direction: column; text-align: center; }
+/* same "on" blue as the spray buttons, for a consistent flush feedback color */
+.toilet-topbar .glass-btn.is-active .glass-slot-content { background: var(--blue); }
+
+.toilet-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+.spray-row { display: flex; align-items: center; gap: 6px; }
+.wash-stop .glass-slot-content { padding: 0; }
+.wash-stop .glass-btn-inner { padding: 0; width: 56px; height: 56px; }
+.wash-stop { flex: 0 0 auto; }
+.wash-stop .sq { width: 12px; height: 12px; background: var(--red); border-radius: 2px; }
+
+.spray-buttons { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.spray-buttons .spray-btn { flex: 1; min-width: 0; }
+.spray-btn .glass-btn-inner {
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 4px;
+}
+.spray-btn .circle-icon {
+  width: 38px; height: 38px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--fill-subtle);
+  color: var(--text);
+}
+.spray-btn .circle-icon svg { width: 18px; height: 18px; }
+.spray-btn .label { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.spray-btn[data-tone="blue"] .circle-icon { color: var(--blue); }
+.spray-btn[data-tone="red"] .circle-icon { color: var(--red); }
+/* keep the icon badge readable as a light chip even when the button
+   itself gets a solid dark fill on selection */
+.glass-btn.is-active .circle-icon { background: rgba(255, 255, 255, 0.18); }
+/* spray mode buttons signal "on" with blue rather than the app-wide
+   monotone accent - selection here doubles as a water-flow indicator */
+.spray-btn .glass-btn.is-active .glass-slot-content { background: var(--blue); }
+
+/* boxed group of control rows - gives the toilet card's lower controls
+   real structure instead of thin rows floating in empty space. */
+.toilet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--fill-subtle);
+}
+.toilet-section-title { font-size: 12px; font-weight: 700; color: var(--text); }
+
+/* heading on the left, status LED + button(s) on the right - one line. */
+.ctrl-row { display: flex; align-items: center; gap: 10px; }
+.ctrl-row .toilet-section-title { flex: 0 0 auto; }
+.ctrl-right { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+
+.level-end .glass-btn-inner { padding: 8px 10px; font-size: 12px; min-width: 30px; }
+/* front/back nozzle position has no stored state over IR - just a pair of
+   momentary buttons, so they share the row width evenly with no status dots. */
+.nozzle-row .level-end { flex: 1; }
+.nozzle-row .level-end .glass-btn-inner { width: 100%; }
+.dot-track { flex: 1; display: flex; justify-content: space-between; gap: 4px; padding: 0 4px; }
+/* fewer dots (the 3-stage temp rows) shouldn't space-between across the
+   full row width - that stretches the gaps far past what reads as one
+   control. Center them as an evenly-spaced group instead. */
+.dot-track.compact { flex: 1; justify-content: center; gap: 12px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--track); display: inline-block; cursor: pointer; }
+.dot.static { cursor: default; }
+.dot.on { background: var(--blue); box-shadow: 0 0 0 3px var(--blue-halo); }
+
+.pill-toggle .glass-btn-inner { padding: 6px 12px; font-size: 12px; min-width: 32px; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; }
+
+.toilet-divider { border: none; border-top: 1px solid var(--divider); margin: 2px 0; }
+
+/* ---------- LED ----------
+   the LED preview / presets / picker show real light colors - that's
+   product data, not app chrome, so it stays colorful on purpose even
+   though the surrounding UI is monotone. */
+.led-preview {
+  position: relative;
+  height: 100px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--divider);
+  background: var(--track);
+  overflow: hidden;
+}
+.led-preview.is-lit { border-color: transparent; }
+.led-preview-fill {
+  position: absolute; inset: 0;
+  width: 0;
+  transition: width 0.15s ease, background 0.2s ease;
+}
+.led-preview-text {
+  position: relative;
+  font-size: 11px; font-weight: 700; color: rgba(0, 0, 0, 0.55);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  pointer-events: none;
+}
+.led-preview-pct { font-size: 16px; font-weight: 700; }
+.led-preview input.led-preview-range {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer;
+}
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field-label { font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; }
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%; height: 4px; border-radius: 3px;
+  background: var(--track);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(28, 28, 30, 0.3);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid #fff;
+}
+
+.swatches { display: flex; gap: 6px; }
+.swatch {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.swatch.selected { border-color: var(--accent); }
+/* LED's primary zone (preview + swatches) is the only thing shown by
+   default (detail panel stays collapsed) - give it more breathing room so
+   the collapsed card doesn't look sparse next to the taller BGM/Toilet
+   cards. */
+.led-panel .card-body { gap: 14px; }
+.led-panel .primary-zone { gap: 14px; }
+.led-panel .field { gap: 6px; }
+.led-panel .field-label { font-size: 12px; }
+.led-panel .swatches { gap: 8px; }
+.led-panel .swatch { width: 32px; height: 32px; border-width: 3px; }
+
+/* ---------- BGM ---------- */
+.now-playing { display: flex; align-items: center; gap: 8px; padding: 5px 3px; }
+.now-playing .art {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: var(--purple-tint);
+  display: flex; align-items: center; justify-content: center; color: var(--purple);
+  flex: 0 0 auto;
+}
+.now-playing .art svg { width: 14px; height: 14px; }
+.now-playing .meta { min-width: 0; }
+.now-playing .title { font-weight: 700; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.transport-row { display: flex; justify-content: center; gap: 5px; align-items: center; }
+.transport-row .glass-btn-inner { padding: 6px; }
+.transport-row .glass-btn-inner svg { width: 13px; height: 13px; }
+
+.song-list { display: flex; flex-direction: column; gap: 3px; }
+.song-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px;
+  background: var(--fill-subtle);
+}
+.song-item:hover { background: var(--fill-subtle-press); }
+.song-item.current { background: var(--fill-subtle-press); color: var(--text); font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--accent); }
+/* BGM's primary zone (now-playing + play button + volume) is the only
+   thing shown by default - same reasoning as LED above. */
+.bgm-panel .card-body { gap: 10px; }
+.bgm-panel .primary-zone { gap: 16px; }
+.bgm-panel .now-playing { gap: 10px; padding: 10px 6px; }
+.bgm-panel .now-playing .art { width: 48px; height: 48px; border-radius: 12px; }
+.bgm-panel .now-playing .art svg { width: 18px; height: 18px; }
+.bgm-panel .now-playing .title { font-size: 13px; }
+.bgm-panel .btn-lg .glass-btn-inner { padding: 12px 12px; font-size: 14px; }
+.bgm-panel .field { gap: 6px; }
+.bgm-panel .field-label { font-size: 12px; }
+
+/* ---------- detail toggle / panel ----------
+   collapsed by default - the primary zone alone is sized to fill the card
+   with no leftover whitespace, so hiding secondary controls here doesn't
+   cost anything visually. Only pulls itself to the bottom when it's the
+   last child (i.e. collapsed, nothing after it) - once the panel is open
+   and follows it, content flows top-down instead of leaving a gap. */
+.detail-toggle {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--divider);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.detail-toggle:last-child { margin-top: auto; }
+.detail-toggle .chev { display: inline-flex; transition: transform 0.2s ease; }
+.detail-toggle .chev svg { width: 10px; height: 10px; }
+.detail-toggle .chev.open { transform: rotate(180deg); }
+.detail-panel {
+  display: flex; flex-direction: column; gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--divider);
+  margin-top: 2px;
+}
+
+/* ---------- scenes ----------
+   the scene swatch shows the scene's real LED color - kept colorful on
+   purpose, same reasoning as the LED section. */
+.scene-card .glass-btn-inner { align-items: center; gap: 10px; padding: 10px; justify-content: flex-start; }
+.scene-swatch { width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto; box-shadow: inset 0 0 0 1px rgba(28, 28, 30, 0.08); }
+.scene-name { font-weight: 700; font-size: 13px; }
+.scene-desc { font-size: 11px; color: var(--text-muted); }
+.scene-list-extra { display: flex; flex-direction: column; gap: 8px; }
+.scene-panel .primary-zone { gap: 8px; }
+.scene-panel .field { gap: 6px; }
+.scene-panel .field-label { font-size: 12px; }
+.scene-panel .card-body { gap: 10px; }
+
+input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%; height: 32px; border: none; border-radius: 8px; cursor: pointer; background: none;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: none; border-radius: 8px; }
+
+.mini-input,
+select.mini-input {
+  width: 100%; padding: 7px 8px; border-radius: 7px;
+  border: 1px solid var(--divider); background: var(--fill-subtle); color: var(--text); font-size: 12px;
+}
+.mini-input::placeholder { color: var(--text-dim); }
+
+.note { font-size: 10px; color: var(--text-muted); line-height: 1.4; }
+
+/* ---------- disabled buttons (unimplemented commands / cooldown) ---------- */
+.glass-btn.is-disabled { cursor: not-allowed; }
+.glass-btn.is-disabled .glass-slot-content { opacity: 0.38; }
+
+/* ---------- status card (mode / occupancy / settings) ---------- */
+.status-card-body {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.status-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--fill-subtle);
+  border-radius: 999px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: #34c759; flex: 0 0 auto; }
+.status-pill.is-offline { color: var(--red); }
+.status-pill.is-offline .status-dot { background: var(--red); }
+.status-pill.is-mock { color: var(--purple); }
+.status-pill.is-mock .status-dot { background: var(--purple); }
+
+/* ---------- toast notifications ---------- */
+.toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 7px 13px;
+  border-radius: 999px;
+  box-shadow: 0 10px 28px rgba(28, 28, 30, 0.2);
+}
+
+/* ---------- settings panel ---------- */
+.status-settings-btn,
+.status-fullscreen-btn { flex: 0 0 auto; }
+.status-settings-btn .glass-btn-inner,
+.status-fullscreen-btn .glass-btn-inner { padding: 8px; }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(28, 28, 30, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+.modal-panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  font-size: 14px;
+}
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  padding: 4px;
+}
+.modal-close svg { width: 20px; height: 20px; }
+.modal-body { display: flex; flex-direction: column; gap: 11px; }
+.glass-btn.settings-save-highlight .glass-slot-content { background: var(--blue); }
+.settings-save-highlight .glass-btn-inner { color: var(--text-on-accent); }

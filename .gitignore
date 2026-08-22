@@ -6,3 +6,8 @@
 .vscode/launch.json
 .vscode/ipch
 compile_commands.json
+
+# frontend build tooling (data/web is the built output actually flashed via
+# uploadfs and stays tracked - see web/package.json's `deploy` script)
+web/node_modules
+web/dist

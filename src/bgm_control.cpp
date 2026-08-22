@@ -15,6 +15,13 @@ static const uint16_t DEBUG_BOOT_TRACK_INDEX = 23;
 
 static uint8_t s_trackIndex = 0;
 static bool s_playing = false;
+// WebUIから明示的に一時停止された状態かどうか。trueの間は、人感センサー主導の
+// 自動再生(bgmSetPlayingFromOccupancy)による再開指示を無視する。人感センサーの
+// 検知距離が短い環境では在室判定が短時間にVACANT⇔ENTERINGを行き来しやすく、
+// そのたびに自動再生が手動の一時停止を問答無用で上書きしてしまう問題があった。
+// 実際に退室(VACANT)したタイミングでのみクリアし、次の入室からは通常の
+// 自動再生に戻す。
+static bool s_manualPauseActive = false;
 static uint8_t s_volume = DEFAULT_VOLUME_PERCENT; // 0-100(Web向け)
 static char s_repeat[4] = "off";                   // "off" | "one" | "all"
 static bool s_shuffle = false;
@@ -186,9 +193,15 @@ bool bgmApplyPatch(JsonObjectConst patch, JsonObject out) {
 
     if (!patch["action"].isNull()) {
         String action = patch["action"].as<String>();
-        if (action == "play") doPlay();
-        else if (action == "pause") doPause();
-        else return false;
+        if (action == "play") {
+            s_manualPauseActive = false;
+            doPlay();
+        } else if (action == "pause") {
+            s_manualPauseActive = true;
+            doPause();
+        } else {
+            return false;
+        }
     }
 
     if (!patch["volume"].isNull()) {
@@ -250,6 +263,15 @@ void bgmWriteTracks(JsonArray tracks) {
 }
 
 void bgmSetPlayingFromOccupancy(bool playing) {
-    if (playing) doPlay();
-    else doPause();
+    if (playing) {
+        // 入室検知: WebUIから明示的に一時停止された直後は、まだ退室していない
+        // 以上その意思を優先し、人感センサー側からの再開指示は無視する。
+        if (s_manualPauseActive) return;
+        doPlay();
+    } else {
+        // 退室検知: 安全側に倒し、手動状態に関わらず必ず停止する。
+        // 次の入室からは通常の自動再生に戻すため、ここでオーバーライドを解除する。
+        s_manualPauseActive = false;
+        doPause();
+    }
 }

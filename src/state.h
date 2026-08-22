@@ -26,6 +26,13 @@ extern uint8_t sensitivity;
 extern uint8_t maxGate;
 extern uint16_t stayDurationSec;
 
+// NVSへ最後に保存された値のスナップショット(GET/PUT /api/settingsの
+// dirty判定用)。sensitivity等のライブ値とは別に保持し、loadParams()での
+// 初期化時とsaveParams()成功時にのみ同期する。
+extern uint8_t savedSensitivity;
+extern uint8_t savedMaxGate;
+extern uint16_t savedStayDurationSec;
+
 void applySensitivity();
 void applyMaxGate();
 void saveParams();

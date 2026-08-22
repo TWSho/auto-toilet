@@ -6,6 +6,7 @@
 #include "scenes.h"
 #include <ESPAsyncWebServer.h>
 #include <AsyncJson.h>
+#include <LittleFS.h>
 
 static AsyncWebServer server(80);
 
@@ -27,6 +28,24 @@ static void sendError(AsyncWebServerRequest *request, int code, const char *errC
 static bool validateStep(long value, long minV, long maxV, long step) {
     if (value < minV || value > maxV) return false;
     return ((value - minV) % step) == 0;
+}
+
+// GET/PUT /api/settingsのレスポンス形式({current, saved, dirty})を組み立てる。
+// フロントエンド(Web仕様.md 4.5節)が要求する形式で、ライブ値(sensitivity等)と
+// NVS保存済みスナップショット(savedSensitivity等)の両方を返す。
+static void writeSettingsResponse(JsonObject root) {
+    JsonObject current = root["current"].to<JsonObject>();
+    current["sensitivity"] = sensitivity;
+    current["maxGate"] = maxGate;
+    current["stayDurationSec"] = stayDurationSec;
+
+    JsonObject saved = root["saved"].to<JsonObject>();
+    saved["sensitivity"] = savedSensitivity;
+    saved["maxGate"] = savedMaxGate;
+    saved["stayDurationSec"] = savedStayDurationSec;
+
+    root["dirty"] =
+        sensitivity != savedSensitivity || maxGate != savedMaxGate || stayDurationSec != savedStayDurationSec;
 }
 
 // GET/PUTはあるがPOSTは無い、等の「パスは存在するがメソッドが違う」場合に405を返すための一覧。
@@ -81,9 +100,7 @@ static void handleStatus(AsyncWebServerRequest *request) {
 static void handleSettingsGet(AsyncWebServerRequest *request) {
     JsonDocument doc;
     JsonObject root = doc.to<JsonObject>();
-    root["sensitivity"] = sensitivity;
-    root["maxGate"] = maxGate;
-    root["stayDurationSec"] = stayDurationSec;
+    writeSettingsResponse(root);
     sendJsonDoc(request, 200, doc);
 }
 
@@ -125,9 +142,7 @@ static void handleSettingsPut(AsyncWebServerRequest *request, JsonVariant &json)
 
     JsonDocument doc;
     JsonObject root = doc.to<JsonObject>();
-    root["sensitivity"] = sensitivity;
-    root["maxGate"] = maxGate;
-    root["stayDurationSec"] = stayDurationSec;
+    writeSettingsResponse(root);
     sendJsonDoc(request, 200, doc);
 }
 
@@ -136,9 +151,7 @@ static void handleSettingsSave(AsyncWebServerRequest *request) {
     saveParams();
     JsonDocument doc;
     JsonObject root = doc.to<JsonObject>();
-    root["sensitivity"] = sensitivity;
-    root["maxGate"] = maxGate;
-    root["stayDurationSec"] = stayDurationSec;
+    writeSettingsResponse(root);
     sendJsonDoc(request, 200, doc);
 }
 
@@ -336,34 +349,54 @@ static void handleNotFound(AsyncWebServerRequest *request) {
 }
 
 void webApiBegin() {
-    server.on("/api/status", HTTP_GET, handleStatus);
+    // ESPAsyncWebServerのserver.on(constchar*,...)はデフォルトで"BackwardCompatible"
+    // マッチ(完全一致 または "{uri}/"で始まる=prefix)になる。例えば"/api/bgm"を
+    // このデフォルトで登録すると"/api/bgm/tracks"宛のGETまで同じハンドラが
+    // 拾ってしまい、後から登録した/api/bgm/tracks専用ハンドラに到達しない
+    // (実機で確認済みのバグ: GET /api/bgm/tracksがGET /api/bgmと同じ応答を返す)。
+    // POST /api/scenesも同様に POST /api/scenes/{id}/execute を巻き込む
+    // (ブラウザ側は常にContent-Type: application/jsonを送るため、
+    // AsyncCallbackJsonWebHandler::canHandleのcontent-type判定も素通りしてしまう)。
+    // そのため全パスをAsyncURIMatcher::exact()で完全一致に固定する。
+    server.on(AsyncURIMatcher::exact("/api/status"), HTTP_GET, handleStatus);
 
-    server.on("/api/settings", HTTP_GET, handleSettingsGet);
-    auto *settingsPutHandler = new AsyncCallbackJsonWebHandler("/api/settings", handleSettingsPut);
+    server.on(AsyncURIMatcher::exact("/api/settings"), HTTP_GET, handleSettingsGet);
+    auto *settingsPutHandler = new AsyncCallbackJsonWebHandler(AsyncURIMatcher::exact("/api/settings"), handleSettingsPut);
     settingsPutHandler->setMethod(HTTP_PUT);
     server.addHandler(settingsPutHandler);
-    server.on("/api/settings/save", HTTP_POST, handleSettingsSave);
+    server.on(AsyncURIMatcher::exact("/api/settings/save"), HTTP_POST, handleSettingsSave);
 
-    server.on("/api/toilet/commands", HTTP_GET, handleToiletCommands);
-    server.on("/api/toilet/state", HTTP_GET, handleToiletState);
+    server.on(AsyncURIMatcher::exact("/api/toilet/commands"), HTTP_GET, handleToiletCommands);
+    server.on(AsyncURIMatcher::exact("/api/toilet/state"), HTTP_GET, handleToiletState);
 
-    server.on("/api/led", HTTP_GET, handleLedGet);
-    auto *ledPutHandler = new AsyncCallbackJsonWebHandler("/api/led", handleLedPut);
+    server.on(AsyncURIMatcher::exact("/api/led"), HTTP_GET, handleLedGet);
+    auto *ledPutHandler = new AsyncCallbackJsonWebHandler(AsyncURIMatcher::exact("/api/led"), handleLedPut);
     ledPutHandler->setMethod(HTTP_PUT);
     server.addHandler(ledPutHandler);
 
-    server.on("/api/bgm", HTTP_GET, handleBgmGet);
-    auto *bgmPutHandler = new AsyncCallbackJsonWebHandler("/api/bgm", handleBgmPut);
+    server.on(AsyncURIMatcher::exact("/api/bgm"), HTTP_GET, handleBgmGet);
+    auto *bgmPutHandler = new AsyncCallbackJsonWebHandler(AsyncURIMatcher::exact("/api/bgm"), handleBgmPut);
     bgmPutHandler->setMethod(HTTP_PUT);
     server.addHandler(bgmPutHandler);
-    server.on("/api/bgm/next", HTTP_POST, handleBgmNext);
-    server.on("/api/bgm/previous", HTTP_POST, handleBgmPrevious);
-    server.on("/api/bgm/tracks", HTTP_GET, handleBgmTracks);
+    server.on(AsyncURIMatcher::exact("/api/bgm/next"), HTTP_POST, handleBgmNext);
+    server.on(AsyncURIMatcher::exact("/api/bgm/previous"), HTTP_POST, handleBgmPrevious);
+    server.on(AsyncURIMatcher::exact("/api/bgm/tracks"), HTTP_GET, handleBgmTracks);
 
-    server.on("/api/scenes", HTTP_GET, handleScenesGet);
-    auto *sceneCreateHandler = new AsyncCallbackJsonWebHandler("/api/scenes", handleSceneCreate);
+    server.on(AsyncURIMatcher::exact("/api/scenes"), HTTP_GET, handleScenesGet);
+    auto *sceneCreateHandler = new AsyncCallbackJsonWebHandler(AsyncURIMatcher::exact("/api/scenes"), handleSceneCreate);
     sceneCreateHandler->setMethod(HTTP_POST);
     server.addHandler(sceneCreateHandler);
+
+    // WebUI(React製フロントエンド、web/npm run buildの出力)をLittleFS上の
+    // /web以下から配信する。/api/*は上記で個別登録済みのため、静的ファイルが
+    // 存在しないパス(=canHandleがfalseを返す)だけがこちらに回ってくる。
+    // /assets/配下はVite出力のコンテンツハッシュ付きファイル名(index-XXXX.js等)
+    // なので長期キャッシュしてよいが、index.html・manifest.webmanifest・icon.svg
+    // はファイル名が固定のため長期キャッシュすると再デプロイ後も端末が古い版を
+    // 表示し続けてしまう(実際に発生した不具合)。/assets/を先に登録して長期
+    // キャッシュを割り当て、それ以外(index.html等)は毎回再検証させる。
+    server.serveStatic("/assets/", LittleFS, "/web/assets/").setCacheControl("public, max-age=31536000, immutable");
+    server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html").setCacheControl("no-cache");
 
     server.onNotFound(handleNotFound);
 

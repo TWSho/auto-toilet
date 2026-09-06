@@ -15,11 +15,15 @@
 #include "led_control.h"
 #include "scenes.h"
 #include "web_api.h"
+#include "tablet_hid.h"
 
 // ============================================================
-// ハードウェア接続 (M5StampS3 PIN2.54版)
+// ハードウェア接続 (M5StampS3A PIN2.54版)
 //   ミリ波センサー LD2410   : UART   TX=G9  RX=G7
-//   Audio Playerモジュール  : UART   TX=G3  RX=G5
+//   Audio Playerモジュール  : UART   TX=G15 RX=G13
+//   ※Audio PlayerはG3/G5から変更(StampS3Aで応答が一切返らず、モジュール本体は正常と
+//   切り分け済みのため、配線元のG3/G5がこの個体のヘッダでは使えない可能性が高いと判断し、
+//   未使用のG13/G15(旧仕様書ではI2C用SDA/SCLラベルだがコード上I2Cは未使用のため転用)へ変更)
 //   赤外線LED送信回路(自作) : GPIO   G1 (送信専用。ベース抵抗経由でNPNトランジスタを駆動しIR LEDを点灯)
 //   状態表示                : 内蔵RGB LED(G21固定、M5Unifiedが自動初期化しM5.Ledで制御)
 //   本体ボタン(G0)           : 押下でトイレ流し(赤外線送信)を手動実行
@@ -29,12 +33,20 @@
 //   デフォルトでこの2ピンに固定されており(sdkconfig: CONFIG_ESP_CONSOLE_UART_NUM=0)、
 //   Arduino側のSerialをUSB CDCへ切り替えても内部的な競合が残り、UART2として
 //   再割り当てしてもジャンパ線での直結ループバックすら成立しなかったため。
+//
+//   ※内蔵RGB LEDについて(M5StampS3A固有の注意): 無印StampS3ではRGB LEDへの給電が
+//   電源投入と同時に常時オンだったが、StampS3AではLED給電が予備LCD用FPCバスの
+//   バックライト系統と多重化された(M5Stack公式のハードウェア更新情報より)。
+//   M5Unified(2026年8月時点の最新0.2.21でも)StampS3A向けの個別ボード判定は未対応で、
+//   無印StampS3と同じ自動判定・GPIO21固定で初期化される。データ線(GPIO21)の制御自体は
+//   従来通りだが、給電経路の変更により実機で点灯しない場合は配線・電源系統を
+//   別途確認すること(ソフト側だけでは断定できないため実機確認が必要)。
 // ============================================================
 static const int RADAR_RX_PIN = 7; // StampS3 RX ← LD2410 TX
 static const int RADAR_TX_PIN = 9; // StampS3 TX → LD2410 RX
 static const uint32_t RADAR_BAUD = 256000;
-static const int AUDIO_TX_PIN = 5;  // StampS3 TX → Audio Playerモジュール RX
-static const int AUDIO_RX_PIN = 3;  // StampS3 RX ← Audio Playerモジュール TX
+static const int AUDIO_TX_PIN = 13; // StampS3A TX → Audio Playerモジュール RX (旧G5から変更)
+static const int AUDIO_RX_PIN = 15; // StampS3A RX ← Audio Playerモジュール TX (旧G3から変更)
 static const int IR_TX_PIN = 1;     // 赤外線LED送信回路(自作)への出力
 
 static const uint8_t LED_BRIGHTNESS_ACTIVE = 179; // 入室・滞在中 約70%
@@ -188,6 +200,7 @@ void setup() {
     ledControlBegin();
     scenesBegin();
     webApiBegin();
+    tabletHidBegin();
 
     setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF); // 起動時は退室状態として消灯
 }
@@ -244,7 +257,9 @@ void updateOccupancy() {
                 enteringSinceMs = now;
                 Serial.println("[STATE] 入室検知");
                 setStatusLed(TFT_RED, LED_BRIGHTNESS_ACTIVE);
+                ledSetOccupancy(true);
                 bgmSetPlayingFromOccupancy(true);
+                tabletHidWake();
             }
             break;
 
@@ -254,7 +269,9 @@ void updateOccupancy() {
                 roomState = RoomState::VACANT;
                 Serial.println("[STATE] 退室検知(滞在前)");
                 setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF);
+                ledSetOccupancy(false);
                 bgmSetPlayingFromOccupancy(false);
+                tabletHidSleep();
             } else if (now - enteringSinceMs >= (unsigned long)stayDurationSec * 1000UL) {
                 // トイレ滞在開始検知 → トイレ滞在処理
                 roomState = RoomState::STAYING;
@@ -270,7 +287,9 @@ void updateOccupancy() {
                 roomState = RoomState::VACANT;
                 Serial.println("[STATE] 退室検知");
                 setStatusLed(TFT_GREEN, LED_BRIGHTNESS_OFF);
+                ledSetOccupancy(false);
                 bgmSetPlayingFromOccupancy(false);
+                tabletHidSleep();
                 if (flushNeeded) {
                     sendToiletFlush();
                 }
@@ -412,7 +431,7 @@ void publishDiscoveryConfig() {
         "\"availability_topic\":\"%s\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
-        "\"device\":{\"identifiers\":[\"auto_toilet_m5stack\"],\"name\":\"Auto Toilet\",\"manufacturer\":\"M5Stack + DIY\",\"model\":\"M5StampS3 + LD2410\"}"
+        "\"device\":{\"identifiers\":[\"auto_toilet_m5stack\"],\"name\":\"Auto Toilet\",\"manufacturer\":\"M5Stack + DIY\",\"model\":\"M5StampS3A + LD2410\"}"
         "}",
         MQTT_PRESENCE_STATE_TOPIC, MQTT_AVAILABILITY_TOPIC);
     mqttClient.publish(MQTT_DISCOVERY_TOPIC, payload, true);

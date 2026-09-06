@@ -18,8 +18,8 @@ export default function App() {
               <BgmCard />
             </div>
             <div className="col-stack col-stack--scene">
-              <SceneCard />
               <StatusCard />
+              <SceneCard />
             </div>
           </main>
         </div>

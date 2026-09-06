@@ -29,6 +29,7 @@ static uint8_t s_cachedBrightness = 0; // 0-100
 static char s_cachedColor[8] = "#000000";
 static char s_presetId[16] = ""; // 空文字列 = null(直近選択プリセットなし/カスタム色)
 static unsigned long s_lastFetchMs = 0;
+static uint8_t s_lastOnBrightness = 100; // 自動消灯前の明るさ(自動点灯時の復元用)
 
 static bool isValidHexColor(const String &s) {
     if (s.length() != 7 || s[0] != '#') return false;
@@ -85,6 +86,7 @@ static bool fetchFromWled() {
         return false;
     }
 
+    bool on = doc["on"] | false;
     uint8_t bri255 = doc["bri"] | 0;
     uint8_t r = 0, g = 0, b = 0;
     JsonArray seg = doc["seg"].as<JsonArray>();
@@ -99,7 +101,10 @@ static bool fetchFromWled() {
             }
         }
     }
-    s_cachedBrightness = (uint8_t)(((uint16_t)bri255 * 100 + 127) / 255);
+    // WLEDは消灯後もbriに直前の明るさを保持し続ける(on:falseでもbri>0のままになりうる)ため、
+    // onを見ずにbriだけで判定すると、入退室連動側が「既に点灯中」と誤認して
+    // 点灯処理をスキップしてしまう(WebUIからの明示的な指定はこの誤認の影響を受けない)。
+    s_cachedBrightness = on ? (uint8_t)(((uint16_t)bri255 * 100 + 127) / 255) : 0;
     snprintf(s_cachedColor, sizeof(s_cachedColor), "#%02x%02x%02x", r, g, b);
     s_reachable = true;
     s_lastFetchMs = millis();
@@ -218,6 +223,20 @@ LedResult ledSetState(JsonObjectConst patch, JsonObject out) {
 
     writeCachedState(out);
     return LedResult::Ok;
+}
+
+void ledSetOccupancy(bool occupied) {
+    uint8_t targetBrightness;
+    if (occupied) {
+        if (s_cachedBrightness > 0) return; // 既に点灯中なら何もしない
+        targetBrightness = s_lastOnBrightness > 0 ? s_lastOnBrightness : 100;
+    } else {
+        if (s_cachedBrightness == 0) return; // 既に消灯中なら何もしない
+        s_lastOnBrightness = s_cachedBrightness;
+        targetBrightness = 0;
+    }
+    if (!pushToWled(targetBrightness, s_cachedColor)) return;
+    s_cachedBrightness = targetBrightness;
 }
 
 bool ledIsReachable() { return s_reachable; }
